@@ -234,7 +234,11 @@ type Chunk struct {
 	Duration time.Duration
 }
 
-func (a *Audio) StreamFromSample(ctx context.Context, sample int64, loop bool) (<-chan Chunk, error) {
+// StreamFromSample streams frames starting at the frame containing sample. If loop is
+// set the stream wraps around at the end of the file. onLoop, when non-nil, is called
+// once every time the stream returns to the frame it started on, i.e. once per full
+// pass over the track.
+func (a *Audio) StreamFromSample(ctx context.Context, sample int64, loop bool, onLoop func()) (<-chan Chunk, error) {
 	index, ok := slices.BinarySearchFunc(
 		a.frames,
 		sample,
@@ -252,6 +256,9 @@ func (a *Audio) StreamFromSample(ctx context.Context, sample int64, loop bool) (
 	if !ok {
 		return nil, errors.New("sample out of bounds")
 	}
+
+	// store starting index so loops are counted relative to where the listener joined
+	startIndex := index
 
 	slog.Info("starting streaming",
 		"requestedSample", sample,
@@ -280,13 +287,17 @@ func (a *Audio) StreamFromSample(ctx context.Context, sample int64, loop bool) (
 			}
 
 			index++
-
 			if index >= len(a.frames) {
 				if !loop {
 					return
 				}
 
 				index = 0
+			}
+
+			// checked after the wrap so startIndex 0 is caught too
+			if index == startIndex && onLoop != nil {
+				onLoop()
 			}
 		}
 	}()
