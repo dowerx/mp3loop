@@ -3,9 +3,12 @@ package audio
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"slices"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 var epoch = time.Unix(0, 0)
@@ -116,10 +119,29 @@ func (f *frame) Parse(h [4]byte, offset int) bool {
 type Audio struct {
 	bytes  []byte
 	frames []frame
+
+	fd *os.File
+}
+
+func (a *Audio) Close() {
+	unix.Munmap(a.bytes)
+	a.fd.Close()
 }
 
 func (a *Audio) Load(mp3File string) (err error) {
-	a.bytes, err = os.ReadFile(mp3File)
+	slog.Info("loading audio", "path", mp3File)
+
+	a.fd, err = os.OpenFile(mp3File, os.O_RDONLY, 0)
+	if err != nil {
+		return err
+	}
+
+	info, err := a.fd.Stat()
+	if err != nil {
+		return err
+	}
+
+	a.bytes, err = unix.Mmap(int(a.fd.Fd()), 0, int(info.Size()), unix.PROT_READ, unix.MAP_SHARED)
 	if err != nil {
 		return err
 	}
@@ -138,6 +160,8 @@ func (a *Audio) Load(mp3File string) (err error) {
 			int(a.bytes[9]&0x7f)
 
 		pos = 10 + size
+
+		slog.Info("found ID3v2 tag, skipping", "nextPos", pos)
 	}
 
 	// index frames
@@ -166,6 +190,8 @@ func (a *Audio) Load(mp3File string) (err error) {
 	if len(a.frames) == 0 {
 		return errors.New("no MP3 frames found")
 	}
+
+	slog.Info("audio loaded", "path", mp3File, "frames", len(a.frames))
 
 	return err
 }
@@ -226,6 +252,12 @@ func (a *Audio) StreamFromSample(ctx context.Context, sample int64, loop bool) (
 	if !ok {
 		return nil, errors.New("sample out of bounds")
 	}
+
+	slog.Info("starting streaming",
+		"requestedSample", sample,
+		"startingSample", a.frames[index].sampleOffset,
+		"frame", index,
+	)
 
 	c := make(chan Chunk, 1)
 	go func() {
