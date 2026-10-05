@@ -1,3 +1,7 @@
+// Package api serves the audio stream over HTTP.
+//
+// A single long lived request streams the track in real time, paced so the client hears
+// it at normal speed, and loops indefinitely until the client disconnects.
 package api
 
 import (
@@ -12,6 +16,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Make builds an http.Server that serves the audio stream at uri, recording counters
+// into metrics as frames are written. The returned server is not yet listening; the
+// caller is responsible for calling ListenAndServe and shutting it down.
 func Make(
 	address string,
 	uri string,
@@ -28,6 +35,11 @@ func Make(
 	}
 }
 
+// streamFactory returns a handler that streams audio in real time, pacing writes so
+// the listener hears the track at its original speed. Playback begins at the sample
+// matching the wall clock, so every listener joining at a given moment hears the same
+// part of the track. The response stays open indefinitely as the track loops, and ends
+// only when the client disconnects.
 func streamFactory(audio audio.Audio, m *metrics.Metrics) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		sample := audio.SampleAt(time.Now())

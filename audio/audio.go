@@ -1,3 +1,9 @@
+// Package audio reads MP3 files and streams their frames in real time.
+//
+// A file is memory mapped and its frames indexed once via Audio.Load, after which any
+// number of goroutines may stream from it concurrently. Playback position is derived
+// from the wall clock rather than from the client, so every listener hears the track
+// from the same point at the same moment.
 package audio
 
 import (
@@ -11,8 +17,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// epoch is the reference point for mapping wall clock time to a position in the track.
 var epoch = time.Unix(0, 0)
 
+// frame is a single indexed MPEG audio frame within the mapped file. offset and length
+// locate its bytes in Audio.bytes, while sampleOffset is its position in the track
+// measured in samples from the first frame.
 type frame struct {
 	offset       int
 	length       int
@@ -27,6 +37,10 @@ type frame struct {
 	channels    int
 }
 
+// Parse decodes a four byte MPEG frame header and fills in the frame's derived fields,
+// with offset recorded as the frame's byte position in the file. It reports false if h
+// is not a supported header, in which case f is left in an unspecified state and the
+// caller should treat the bytes as unparseable and keep scanning.
 func (f *frame) Parse(h [4]byte, offset int) bool {
 	x := uint32(h[0])<<24 |
 		uint32(h[1])<<16 |
@@ -116,6 +130,9 @@ func (f *frame) Parse(h [4]byte, offset int) bool {
 	return true
 }
 
+// Audio is a memory mapped MP3 file with its frames indexed for random access. Frames
+// are read concurrently by any number of streaming goroutines, so a single Audio can be
+// shared across listeners without locking.
 type Audio struct {
 	bytes  []byte
 	frames []frame
@@ -123,11 +140,18 @@ type Audio struct {
 	fd *os.File
 }
 
+// Close unmaps the file and closes the underlying descriptor. It must be called once
+// the Audio is no longer being read from, otherwise streaming goroutines may fault on
+// unmapped memory.
 func (a *Audio) Close() {
 	unix.Munmap(a.bytes)
 	a.fd.Close()
 }
 
+// Load memory maps mp3File and indexes its MPEG frames, skipping any leading ID3v2 tag.
+// Unparseable bytes are scanned past rather than treated as an error, so files with
+// trailing tags still load. It returns an error if the file cannot be mapped or if no
+// frames are found. Close must be called to release the mapping.
 func (a *Audio) Load(mp3File string) (err error) {
 	slog.Info("loading audio", "path", mp3File)
 
@@ -196,6 +220,7 @@ func (a *Audio) Load(mp3File string) (err error) {
 	return err
 }
 
+// TotalSamples returns the length of the track in samples, or 0 if nothing is loaded.
 func (a *Audio) TotalSamples() int64 {
 	if len(a.frames) == 0 {
 		return 0
@@ -205,6 +230,10 @@ func (a *Audio) TotalSamples() int64 {
 	return f.sampleOffset + int64(f.samples)
 }
 
+// SampleAt maps a wall clock time to a sample offset in the track, wrapping around the
+// track length and always returning a non-negative offset. This is what lets a listener
+// who connects partway through still join the track where everyone else is, rather than
+// restarting it.
 func (a *Audio) SampleAt(t time.Time) int64 {
 	totalSamples := a.TotalSamples()
 	if totalSamples == 0 {
@@ -229,15 +258,27 @@ func (a *Audio) SampleAt(t time.Time) int64 {
 	return samples
 }
 
+// Chunk is one MPEG frame ready to be written to a client. Data aliases the memory
+// mapped file and must not be modified. Duration is how long the frame takes to play,
+// which the caller uses to pace writes.
 type Chunk struct {
 	Data     []byte
 	Duration time.Duration
 }
 
-// StreamFromSample streams frames starting at the frame containing sample. If loop is
-// set the stream wraps around at the end of the file. onLoop, when non-nil, is called
-// once every time the stream returns to the frame it started on, i.e. once per full
-// pass over the track.
+// StreamFromSample streams frames starting at the frame containing sample, and returns
+// an error if no frame covers that sample. Frames are produced as fast as the receiver
+// reads them, with no pacing applied; it is the caller's job to sleep for each chunk's
+// Duration to play back in real time.
+//
+// If loop is set the stream wraps around at the end of the file instead of ending. The
+// returned channel is closed once the track finishes, or as soon as ctx is cancelled,
+// so a receiver that stops reading will not leak the producing goroutine.
+//
+// onLoop, when non-nil, is called from the producing goroutine each time the stream
+// returns to the frame it started on, i.e. once per full pass over the track. Because
+// the count is relative to the join point, a listener who starts mid-track is not
+// counted until they have heard the entire track.
 func (a *Audio) StreamFromSample(ctx context.Context, sample int64, loop bool, onLoop func()) (<-chan Chunk, error) {
 	index, ok := slices.BinarySearchFunc(
 		a.frames,
