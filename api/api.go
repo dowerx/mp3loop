@@ -25,7 +25,10 @@ func Make(
 	audio audio.Audio,
 	metrics *metrics.Metrics) *http.Server {
 	router := gin.New()
-	router.Use(gslog.SetLogger())
+	router.Use(gslog.SetLogger(gslog.WithLogger(
+		func(c *gin.Context, l *slog.Logger) *slog.Logger {
+			return slog.Default()
+		})))
 	router.Use(gin.Recovery())
 	router.GET(uri, streamFactory(audio, metrics))
 
