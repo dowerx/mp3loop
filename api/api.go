@@ -54,6 +54,8 @@ func streamFactory(audio audio.Audio, m *metrics.Metrics) gin.HandlerFunc {
 		}
 
 		m.PlaysCounter.Inc()
+		m.ActiveListeners.Inc()
+		defer m.ActiveListeners.Dec()
 
 		c.Header("Content-Type", "audio/mpeg")
 		c.Header("Cache-Control", "no-cache")

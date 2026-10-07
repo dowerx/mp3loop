@@ -13,12 +13,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Metrics holds the process counters exposed on the metrics endpoint. The counters are
-// exported so callers can record into them directly; all of them are safe for
-// concurrent use.
+// Metrics holds the process metrics exposed on the metrics endpoint. They are exported
+// so callers can record into them directly; all of them are safe for concurrent use.
 type Metrics struct {
 	// PlaysCounter counts requests that successfully began streaming.
 	PlaysCounter prometheus.Counter
+
+	// ActiveListeners gauges how many listeners are streaming right now.
+	ActiveListeners prometheus.Gauge
 
 	// LoopsCounter counts completed passes over the track. A pass is measured relative
 	// to where the listener joined, so it fires once the stream returns to the frame it
@@ -45,6 +47,10 @@ func Make(address string) *Metrics {
 			Name: "mp3loop_plays",
 			Help: "Total number of play requests.",
 		}),
+		ActiveListeners: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "mp3loop_active_listeners",
+			Help: "The number of active listeners.",
+		}),
 		LoopsCounter: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "mp3loop_loops",
 			Help: "Total number of times listeners have looped around.",
@@ -62,6 +68,7 @@ func Make(address string) *Metrics {
 	m.registry = prometheus.NewRegistry()
 	m.registry.MustRegister(
 		m.PlaysCounter,
+		m.ActiveListeners,
 		m.LoopsCounter,
 		m.TimeCounter,
 		m.ByteCounter,

@@ -53,14 +53,20 @@ Both listen addresses default to all interfaces. Metrics are unauthenticated, so
 
 ## Metrics
 
-| Metric                   | Type    | Description                                       |
-| ------------------------ | ------- | ------------------------------------------------- |
-| `mp3loop_plays`          | counter | Requests that successfully began streaming        |
-| `mp3loop_loops`          | counter | Completed passes over the track                   |
-| `mp3loop_served_seconds` | counter | Seconds of audio written to clients               |
-| `mp3loop_served_bytes`   | counter | Bytes of audio written to clients                 |
+| Metric                     | Type    | Description                                |
+| -------------------------- | ------- | ------------------------------------------ |
+| `mp3loop_plays`            | counter | Requests that successfully began streaming |
+| `mp3loop_active_listeners` | gauge   | Listeners streaming right now              |
+| `mp3loop_loops`            | counter | Completed passes over the track            |
+| `mp3loop_served_seconds`   | counter | Seconds of audio written to clients        |
+| `mp3loop_served_bytes`     | counter | Bytes of audio written to clients          |
 
 Standard `go_*` and `process_*` collectors are registered alongside these.
+
+`mp3loop_active_listeners` is the only gauge: it goes up when a request starts streaming
+and back down when that request ends, so it is read as-is rather than through `rate()` or
+`increase()`. It only counts requests that reached the streaming loop — connections
+rejected before playback starts are not included.
 
 `mp3loop_loops` counts full passes, and a pass is measured relative to where each
 listener joined rather than at the end of the file. A listener who connects mid-track
@@ -99,8 +105,8 @@ The code is split so each layer can be read on its own:
   library and `x/sys`, so it can be reused without pulling in a web framework. It
   reports loops through an `onLoop` callback rather than depending on the metrics
   package.
-- `api` — the HTTP handler that paces the stream and records counters.
-- `metrics` — counter definitions and the scrape endpoint.
+- `api` — the HTTP handler that paces the stream and records metrics.
+- `metrics` — metric definitions and the scrape endpoint.
 
 ## Notes and limitations
 
